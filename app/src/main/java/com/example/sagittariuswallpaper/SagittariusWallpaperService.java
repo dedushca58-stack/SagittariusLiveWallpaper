@@ -86,7 +86,7 @@ public class SagittariusWallpaperService extends WallpaperService {
             c.drawRect(0, 0, 1080, 2400, p);
             p.setShader(new RadialGradient(430, 620, 1250,
                     new int[]{0x2449b5b4, 0x10218c91, 0x00000000},
-                    null, Shader.TileMode.CLAMP), p);
+                    null, Shader.TileMode.CLAMP));
             c.drawRect(0, 0, 1080, 2400, p);
             p.setShader(null);
 
@@ -128,7 +128,7 @@ public class SagittariusWallpaperService extends WallpaperService {
             c.drawRoundRect(panel, 76, 76, p);
             p.setShader(null);
             p.setStrokeWidth(2);
-            p.setColor(0x338ffffff);
+            p.setColor(0x33ffffff);
             c.drawRoundRect(new RectF(101, 263, 979, 1027), 62, 62, p);
             p.setStyle(Paint.Style.FILL);
 
