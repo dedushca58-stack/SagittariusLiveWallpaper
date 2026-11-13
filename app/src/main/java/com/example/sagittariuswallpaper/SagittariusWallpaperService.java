@@ -1,265 +1,208 @@
 package com.example.sagittariuswallpaper;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.LinearGradient;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
-import android.graphics.Typeface;
-import android.service.wallpaper.WallpaperService;
-import android.view.SurfaceHolder;
 import android.os.Handler;
 import android.os.Looper;
-import java.util.Random;
+import android.service.wallpaper.WallpaperService;
+import android.view.SurfaceHolder;
 
+/**
+ * Renders the user's original wallpaper bitmap without redrawing or altering it.
+ * The only animated pixels are translucent reflections clipped to the blue medallion.
+ */
 public class SagittariusWallpaperService extends WallpaperService {
-    @Override public Engine onCreateEngine() { return new WallpaperEngine(); }
+    @Override
+    public Engine onCreateEngine() {
+        return new WallpaperEngine();
+    }
 
     private class WallpaperEngine extends Engine {
+        private static final long FRAME_DELAY_MS = 40L;
+        // Medallion geometry in the original 813 x 1933 wallpaper image.
+        private static final float MEDALLION_X = 405f;
+        private static final float MEDALLION_Y = 1190f;
+        private static final float MEDALLION_RADIUS = 190f;
+        // Keep the brightest reflection away from the gold Sagittarius emblem.
+        private static final float EMBLEM_CLEAR_RADIUS = 48f;
+
         private final Handler handler = new Handler(Looper.getMainLooper());
-        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Random random = new Random(417);
+        private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Paint lightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Matrix imageMatrix = new Matrix();
+        private Bitmap wallpaper;
         private boolean visible;
-        private float phase = 0f;
+        private boolean surfaceReady;
+        private int surfaceWidth;
+        private int surfaceHeight;
+        private float imageScale = 1f;
+        private float imageOffsetX;
+        private float imageOffsetY;
+        private float phase;
 
         private final Runnable drawTask = new Runnable() {
             @Override public void run() {
+                if (!visible || !surfaceReady) return;
                 drawFrame();
-                if (visible) handler.postDelayed(this, 33);
+                if (visible) handler.postDelayed(this, FRAME_DELAY_MS);
             }
         };
 
-        @Override public void onVisibilityChanged(boolean v) {
-            visible = v;
+        WallpaperEngine() {
+            wallpaper = BitmapFactory.decodeResource(getResources(), R.drawable.wallpaper);
+            setTouchEventsEnabled(false);
+        }
+
+        @Override public void onVisibilityChanged(boolean isVisible) {
+            visible = isVisible;
             handler.removeCallbacks(drawTask);
-            if (visible) drawTask.run();
+            if (visible && surfaceReady) drawTask.run();
         }
 
-        @Override public void onSurfaceChanged(SurfaceHolder h, int f, int w, int ht) {
-            super.onSurfaceChanged(h, f, w, ht);
+        @Override public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+            super.onSurfaceChanged(holder, format, width, height);
+            surfaceWidth = width;
+            surfaceHeight = height;
+            surfaceReady = width > 0 && height > 0;
+            updateImageTransform();
             drawFrame();
+            if (visible) {
+                handler.removeCallbacks(drawTask);
+                handler.postDelayed(drawTask, FRAME_DELAY_MS);
+            }
         }
 
-        @Override public void onSurfaceDestroyed(SurfaceHolder h) {
+        @Override public void onSurfaceDestroyed(SurfaceHolder holder) {
+            surfaceReady = false;
             visible = false;
             handler.removeCallbacks(drawTask);
-            super.onSurfaceDestroyed(h);
+            super.onSurfaceDestroyed(holder);
         }
 
         @Override public void onDestroy() {
             visible = false;
+            surfaceReady = false;
             handler.removeCallbacks(drawTask);
+            if (wallpaper != null && !wallpaper.isRecycled()) {
+                wallpaper.recycle();
+                wallpaper = null;
+            }
             super.onDestroy();
         }
 
+        private void updateImageTransform() {
+            if (wallpaper == null || surfaceWidth <= 0 || surfaceHeight <= 0) return;
+
+            // Center-crop uniformly to fill the display, preserving the original artwork's proportions.
+            imageScale = Math.max(
+                    surfaceWidth / (float) wallpaper.getWidth(),
+                    surfaceHeight / (float) wallpaper.getHeight());
+            float drawnWidth = wallpaper.getWidth() * imageScale;
+            float drawnHeight = wallpaper.getHeight() * imageScale;
+            imageOffsetX = (surfaceWidth - drawnWidth) * 0.5f;
+            imageOffsetY = (surfaceHeight - drawnHeight) * 0.5f;
+            imageMatrix.setScale(imageScale, imageScale);
+            imageMatrix.postTranslate(imageOffsetX, imageOffsetY);
+        }
+
         private void drawFrame() {
+            if (wallpaper == null || !surfaceReady) return;
             SurfaceHolder holder = getSurfaceHolder();
-            Canvas c = null;
+            Canvas canvas = null;
             try {
-                c = holder.lockCanvas();
-                if (c != null) drawScene(c, c.getWidth(), c.getHeight());
+                canvas = holder.lockCanvas();
+                if (canvas == null) return;
+
+                // First draw the exact uploaded bitmap. No generated replacement artwork.
+                canvas.drawColor(Color.BLACK);
+                canvas.drawBitmap(wallpaper, imageMatrix, bitmapPaint);
+
+                drawMedallionReflections(canvas);
+            } catch (RuntimeException ignored) {
+                // The wallpaper surface can disappear while Android is changing screens.
             } finally {
-                if (c != null) holder.unlockCanvasAndPost(c);
+                if (canvas != null) {
+                    try {
+                        holder.unlockCanvasAndPost(canvas);
+                    } catch (RuntimeException ignored) {
+                        // Surface was already released by the system.
+                    }
+                }
             }
         }
 
-        private void fill(Canvas c, int color) {
-            p.setShader(null);
-            p.setStyle(Paint.Style.FILL);
-            p.setColor(color);
-            p.clearShadowLayer();
-            c.drawRect(0, 0, 1080, 2400, p);
-        }
+        private void drawMedallionReflections(Canvas canvas) {
+            float cx = imageOffsetX + MEDALLION_X * imageScale;
+            float cy = imageOffsetY + MEDALLION_Y * imageScale;
+            float radius = MEDALLION_RADIUS * imageScale;
+            float emblemClear = EMBLEM_CLEAR_RADIUS * imageScale;
 
-        private void drawScene(Canvas c, int w, int h) {
-            float sx = w / 1080f, sy = h / 2400f;
-            c.save();
-            c.scale(sx, sy);
+            canvas.save();
 
-            // Deep petrol-teal leather, with a soft central sheen.
-            p.setShader(new LinearGradient(0, 0, 1080, 2400,
-                    new int[]{0xff06434a, 0xff07383e, 0xff052b32, 0xff031f28},
-                    new float[]{0f, .34f, .72f, 1f}, Shader.TileMode.CLAMP));
-            c.drawRect(0, 0, 1080, 2400, p);
-            p.setShader(new RadialGradient(430, 620, 1250,
-                    new int[]{0x2449b5b4, 0x10218c91, 0x00000000},
+            // Even-odd path makes a transparent central opening, so the gold symbol
+            // remains exactly as it appears in the original bitmap.
+            Path reflectionArea = new Path();
+            reflectionArea.setFillType(Path.FillType.EVEN_ODD);
+            reflectionArea.addCircle(cx, cy, radius, Path.Direction.CW);
+            reflectionArea.addCircle(cx, cy, emblemClear, Path.Direction.CCW);
+            canvas.clipPath(reflectionArea);
+
+            float travel = (phase - 0.5f) * radius * 3.0f;
+            float beamX = cx + travel;
+            float beamY = cy - radius * 0.10f;
+
+            // Broad, soft reflection that glides slowly across the blue glass.
+            lightPaint.setStyle(Paint.Style.FILL);
+            lightPaint.setShader(new RadialGradient(
+                    beamX, beamY, radius * 0.88f,
+                    new int[] { 0x38ffffff, 0x19d8f6ff, 0x00ffffff },
+                    new float[] { 0f, 0.48f, 1f },
+                    Shader.TileMode.CLAMP));
+            canvas.drawCircle(beamX, beamY, radius * 0.88f, lightPaint);
+            lightPaint.setShader(null);
+
+            // Narrow diagonal specular highlight; low opacity to preserve the image.
+            canvas.save();
+            canvas.rotate(-27f, cx, cy);
+            float streakX = cx + travel * 1.18f;
+            RectF streak = new RectF(
+                    streakX - radius * 1.25f,
+                    cy - radius * 0.10f,
+                    streakX + radius * 1.25f,
+                    cy + radius * 0.10f);
+            lightPaint.setShader(new android.graphics.LinearGradient(
+                    streak.left, streak.top, streak.right, streak.bottom,
+                    new int[] { 0x00ffffff, 0x12ffffff, 0x42ffffff, 0x12ffffff, 0x00ffffff },
+                    new float[] { 0f, 0.34f, 0.5f, 0.66f, 1f },
+                    Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(streak, radius * 0.1f, radius * 0.1f, lightPaint);
+            lightPaint.setShader(null);
+            canvas.restore();
+
+            // A subtle moving glint near the edge of the medallion.
+            float angle = (phase * 360f) - 90f;
+            double radians = Math.toRadians(angle);
+            float glintX = cx + (float) Math.cos(radians) * radius * 0.78f;
+            float glintY = cy + (float) Math.sin(radians) * radius * 0.78f;
+            lightPaint.setShader(new RadialGradient(
+                    glintX, glintY, radius * 0.22f,
+                    new int[] { 0x66ffffff, 0x20ffffff, 0x00ffffff },
                     null, Shader.TileMode.CLAMP));
-            c.drawRect(0, 0, 1080, 2400, p);
-            p.setShader(null);
+            canvas.drawCircle(glintX, glintY, radius * 0.22f, lightPaint);
+            lightPaint.setShader(null);
 
-            // Fine, irregular leather grain and subtle embossed pores.
-            random.setSeed(417);
-            p.setStrokeWidth(1.1f);
-            for (int i = 0; i < 5200; i++) {
-                float x = random.nextFloat() * 1080f;
-                float y = random.nextFloat() * 2400f;
-                int a = 8 + random.nextInt(17);
-                p.setColor((i % 3 == 0) ? (a << 24) | 0x8fe2d5 : (a << 24) | 0x001015);
-                float r = .7f + random.nextFloat() * 1.4f;
-                c.drawCircle(x, y, r, p);
-            }
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(1.4f);
-            p.setColor(0x0d9fe1d5);
-            for (int i = 0; i < 34; i++) {
-                float y = 40 + i * 73;
-                c.drawArc(new RectF(-180, y, 1250, y + 150), 190, 155, false, p);
-            }
-            p.setStyle(Paint.Style.FILL);
+            canvas.restore();
 
-            // Floating glass plate with depth, tint and polished edge.
-            RectF panel = new RectF(88, 250, 992, 1040);
-            p.setShader(new LinearGradient(120, 250, 950, 1040,
-                    new int[]{0x3bf4ffff, 0x1e9ce0e5, 0x1745aeb8, 0x26304450},
-                    new float[]{0f, .28f, .7f, 1f}, Shader.TileMode.CLAMP));
-            p.setShadowLayer(34, 0, 22, 0x88000812);
-            c.drawRoundRect(panel, 76, 76, p);
-            p.clearShadowLayer();
-            p.setShader(null);
-
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(5);
-            p.setShader(new LinearGradient(90, 250, 990, 1040,
-                    new int[]{0xbfffffff, 0x668be7eb, 0x5593dce1, 0x99e9ffff},
-                    null, Shader.TileMode.CLAMP));
-            c.drawRoundRect(panel, 76, 76, p);
-            p.setShader(null);
-            p.setStrokeWidth(2);
-            p.setColor(0x33ffffff);
-            c.drawRoundRect(new RectF(101, 263, 979, 1027), 62, 62, p);
-            p.setStyle(Paint.Style.FILL);
-
-            float cx = 540f, cy = 645f;
-
-            // Outer lens: dark bevel, bright glass rim and transparent body.
-            p.setShader(new RadialGradient(cx - 72, cy - 105, 330,
-                    new int[]{0xffd9ffff, 0xff77c9df, 0xff174c70, 0xff061d37},
-                    new float[]{0f, .48f, .82f, 1f}, Shader.TileMode.CLAMP));
-            p.setShadowLayer(30, 0, 17, 0xaa00121e);
-            c.drawCircle(cx, cy, 264, p);
-            p.clearShadowLayer();
-            p.setShader(null);
-
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(13);
-            p.setShader(new LinearGradient(cx - 250, cy - 250, cx + 250, cy + 250,
-                    new int[]{0xfff0ffff, 0xff78d4ec, 0xff0a3454, 0xffbcefff},
-                    null, Shader.TileMode.CLAMP));
-            c.drawCircle(cx, cy, 252, p);
-            p.setShader(null);
-            p.setStrokeWidth(4);
-            p.setColor(0xaaffffff);
-            c.drawCircle(cx, cy, 235, p);
-            p.setStrokeWidth(2);
-            p.setColor(0x5594f1ff);
-            c.drawCircle(cx, cy, 222, p);
-            p.setStyle(Paint.Style.FILL);
-
-            // Blue convex cabochon, visibly domed rather than a flat disc.
-            p.setShader(new RadialGradient(cx - 66, cy - 84, 220,
-                    new int[]{0xff68d9ff, 0xff197dc4, 0xff07518e, 0xff032b58},
-                    new float[]{0f, .36f, .73f, 1f}, Shader.TileMode.CLAMP));
-            c.drawCircle(cx, cy, 184, p);
-            p.setShader(null);
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(5);
-            p.setColor(0x887ceaff);
-            c.drawCircle(cx, cy, 180, p);
-            p.setStyle(Paint.Style.FILL);
-
-            // All animated light is clipped to the blue cabochon.
-            c.save();
-            Path lensClip = new Path();
-            lensClip.addCircle(cx, cy, 178, Path.Direction.CW);
-            c.clipPath(lensClip);
-            float sweep = ((phase % 1f) * 620f) - 310f;
-            p.setShader(new LinearGradient(cx - 310 + sweep, cy - 220,
-                    cx + 80 + sweep, cy + 220,
-                    new int[]{0x00ffffff, 0x12ffffff, 0x99ffffff, 0x24ffffff, 0x00ffffff},
-                    new float[]{0f, .38f, .5f, .62f, 1f}, Shader.TileMode.CLAMP));
-            c.drawRect(cx - 190, cy - 190, cx + 190, cy + 190, p);
-            p.setShader(null);
-            p.setShader(new RadialGradient(cx - 82, cy - 105, 225,
-                    new int[]{0x55ffffff, 0x12b6f5ff, 0x00000000},
-                    null, Shader.TileMode.CLAMP));
-            c.drawCircle(cx, cy, 180, p);
-            p.setShader(null);
-            // Narrow moving specular streak.
-            c.rotate(-24f, cx, cy);
-            p.setShader(new LinearGradient(cx - 230 + sweep, cy - 24,
-                    cx + 230 + sweep, cy + 24,
-                    new int[]{0x00ffffff, 0x00ffffff, 0x55ffffff, 0x00ffffff},
-                    new float[]{0f, .38f, .5f, 1f}, Shader.TileMode.CLAMP));
-            c.drawRoundRect(new RectF(cx - 220, cy - 18, cx + 220, cy + 18), 18, 18, p);
-            p.setShader(null);
-            c.restore();
-
-            // Sagittarius arrow drawn as vector paths so it remains gold on every device.
-            c.save();
-            c.translate(cx, cy);
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeCap(Paint.Cap.ROUND);
-            p.setStrokeJoin(Paint.Join.ROUND);
-            p.setStrokeWidth(23);
-            p.setShader(new LinearGradient(-90, 95, 95, -95,
-                    new int[]{0xff8a4a0d, 0xffffe7a0, 0xffd18a25, 0xfffff0b4},
-                    null, Shader.TileMode.CLAMP));
-            Path arrow = new Path();
-            arrow.moveTo(-83, 82);
-            arrow.lineTo(77, -78);
-            c.drawPath(arrow, p);
-            Path head = new Path();
-            head.moveTo(4, -78);
-            head.lineTo(77, -78);
-            head.lineTo(77, -5);
-            c.drawPath(head, p);
-            Path cross = new Path();
-            cross.moveTo(-61, -12);
-            cross.lineTo(13, 62);
-            c.drawPath(cross, p);
-            p.setShader(null);
-            p.setStrokeWidth(5);
-            p.setColor(0xfffff0c2);
-            c.drawPath(arrow, p);
-            c.drawPath(head, p);
-            c.drawPath(cross, p);
-            p.setStyle(Paint.Style.FILL);
-            c.restore();
-
-            // Small stationary glass glints on the upper-left rim.
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(5);
-            p.setStrokeCap(Paint.Cap.ROUND);
-            p.setColor(0x99ffffff);
-            c.drawArc(new RectF(cx - 244, cy - 244, cx + 244, cy + 244), 205, 43, false, p);
-            p.setStrokeWidth(2);
-            p.setColor(0x66b8f6ff);
-            c.drawArc(new RectF(cx - 228, cy - 228, cx + 228, cy + 228), 25, 42, false, p);
-            p.setStyle(Paint.Style.FILL);
-
-            // Bottom glass strip.
-            RectF strip = new RectF(88, 2110, 992, 2260);
-            p.setShader(new LinearGradient(0, 2110, 0, 2260,
-                    new int[]{0x3effffff, 0x2845b8c5, 0x38304a56, 0x48202d39},
-                    null, Shader.TileMode.CLAMP));
-            p.setShadowLayer(24, 0, 12, 0x88000000);
-            c.drawRoundRect(strip, 54, 54, p);
-            p.clearShadowLayer();
-            p.setShader(null);
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(4);
-            p.setColor(0x779ceaf0);
-            c.drawRoundRect(strip, 54, 54, p);
-            p.setStrokeWidth(2);
-            p.setColor(0x44ffffff);
-            c.drawLine(145, 2135, 935, 2135, p);
-            p.setStyle(Paint.Style.FILL);
-
-            c.restore();
-            phase += 0.0045f;
+            phase += 0.0035f;
+            if (phase >= 1f) phase -= 1f;
         }
     }
 }
