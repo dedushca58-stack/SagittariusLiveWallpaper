@@ -15,37 +15,31 @@ import android.os.Looper;
 import android.service.wallpaper.WallpaperService;
 import android.view.SurfaceHolder;
 
-/**
- * Renders the user's original wallpaper bitmap without redrawing or altering it.
- * The only animated pixels are translucent reflections clipped to the blue medallion.
- */
+import java.io.InputStream;
+
+/** Original wallpaper plus a translucent, slowly drifting portrait reflection in the medallion. */
 public class SagittariusWallpaperService extends WallpaperService {
-    @Override
-    public Engine onCreateEngine() {
-        return new WallpaperEngine();
-    }
+    @Override public Engine onCreateEngine() { return new WallpaperEngine(); }
 
     private class WallpaperEngine extends Engine {
         private static final long FRAME_DELAY_MS = 40L;
-        // Medallion geometry in the original 813 x 1933 wallpaper image.
+        // Geometry measured against the original 813 x 1933 wallpaper.
         private static final float MEDALLION_X = 405f;
         private static final float MEDALLION_Y = 1190f;
         private static final float MEDALLION_RADIUS = 190f;
-        // Keep the brightest reflection away from the gold Sagittarius emblem.
-        private static final float EMBLEM_CLEAR_RADIUS = 48f;
 
         private final Handler handler = new Handler(Looper.getMainLooper());
         private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Paint portraitPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Paint lightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Matrix imageMatrix = new Matrix();
+
         private Bitmap wallpaper;
+        private Bitmap portraitReflection;
         private boolean visible;
         private boolean surfaceReady;
-        private int surfaceWidth;
-        private int surfaceHeight;
-        private float imageScale = 1f;
-        private float imageOffsetX;
-        private float imageOffsetY;
+        private int surfaceWidth, surfaceHeight;
+        private float imageScale = 1f, imageOffsetX, imageOffsetY;
         private float phase;
 
         private final Runnable drawTask = new Runnable() {
@@ -58,6 +52,11 @@ public class SagittariusWallpaperService extends WallpaperService {
 
         WallpaperEngine() {
             wallpaper = BitmapFactory.decodeResource(getResources(), R.drawable.wallpaper);
+            try (InputStream in = getAssets().open("portrait_reflection.png")) {
+                portraitReflection = BitmapFactory.decodeStream(in);
+            } catch (Exception ignored) {
+                // The original wallpaper still works if the optional portrait asset is not installed yet.
+            }
             setTouchEventsEnabled(false);
         }
 
@@ -91,24 +90,19 @@ public class SagittariusWallpaperService extends WallpaperService {
             visible = false;
             surfaceReady = false;
             handler.removeCallbacks(drawTask);
-            if (wallpaper != null && !wallpaper.isRecycled()) {
-                wallpaper.recycle();
-                wallpaper = null;
-            }
+            if (wallpaper != null && !wallpaper.isRecycled()) wallpaper.recycle();
+            if (portraitReflection != null && !portraitReflection.isRecycled()) portraitReflection.recycle();
+            wallpaper = null;
+            portraitReflection = null;
             super.onDestroy();
         }
 
         private void updateImageTransform() {
             if (wallpaper == null || surfaceWidth <= 0 || surfaceHeight <= 0) return;
-
-            // Center-crop uniformly to fill the display, preserving the original artwork's proportions.
-            imageScale = Math.max(
-                    surfaceWidth / (float) wallpaper.getWidth(),
-                    surfaceHeight / (float) wallpaper.getHeight());
-            float drawnWidth = wallpaper.getWidth() * imageScale;
-            float drawnHeight = wallpaper.getHeight() * imageScale;
-            imageOffsetX = (surfaceWidth - drawnWidth) * 0.5f;
-            imageOffsetY = (surfaceHeight - drawnHeight) * 0.5f;
+            imageScale = Math.max(surfaceWidth / (float) wallpaper.getWidth(),
+                                  surfaceHeight / (float) wallpaper.getHeight());
+            imageOffsetX = (surfaceWidth - wallpaper.getWidth() * imageScale) * 0.5f;
+            imageOffsetY = (surfaceHeight - wallpaper.getHeight() * imageScale) * 0.5f;
             imageMatrix.setScale(imageScale, imageScale);
             imageMatrix.postTranslate(imageOffsetX, imageOffsetY);
         }
@@ -120,88 +114,81 @@ public class SagittariusWallpaperService extends WallpaperService {
             try {
                 canvas = holder.lockCanvas();
                 if (canvas == null) return;
-
-                // First draw the exact uploaded bitmap. No generated replacement artwork.
                 canvas.drawColor(Color.BLACK);
+                // The user's original artwork is always the untouched base layer.
                 canvas.drawBitmap(wallpaper, imageMatrix, bitmapPaint);
-
-                drawMedallionReflections(canvas);
+                drawPortraitReflection(canvas);
+                drawGlassHighlights(canvas);
             } catch (RuntimeException ignored) {
-                // The wallpaper surface can disappear while Android is changing screens.
+                // Android may release the wallpaper surface during a screen transition.
             } finally {
                 if (canvas != null) {
-                    try {
-                        holder.unlockCanvasAndPost(canvas);
-                    } catch (RuntimeException ignored) {
-                        // Surface was already released by the system.
-                    }
+                    try { holder.unlockCanvasAndPost(canvas); }
+                    catch (RuntimeException ignored) { }
                 }
             }
         }
 
-        private void drawMedallionReflections(Canvas canvas) {
+        private void drawPortraitReflection(Canvas canvas) {
+            if (portraitReflection == null) return;
+
             float cx = imageOffsetX + MEDALLION_X * imageScale;
             float cy = imageOffsetY + MEDALLION_Y * imageScale;
             float radius = MEDALLION_RADIUS * imageScale;
-            float emblemClear = EMBLEM_CLEAR_RADIUS * imageScale;
+
+            // Very slow, gentle drift. The image itself is translucent (34% alpha),
+            // so the original gold Sagittarius emblem remains visible through it.
+            double wave = phase * Math.PI * 2.0;
+            float driftX = (float) Math.sin(wave) * radius * 0.15f;
+            float driftY = (float) Math.sin(wave * 0.5) * radius * 0.025f;
+            float breathing = 1f + (float) Math.sin(wave) * 0.012f;
+            float half = radius * 0.91f * breathing;
 
             canvas.save();
+            Path circle = new Path();
+            circle.addCircle(cx, cy, radius * 0.94f, Path.Direction.CW);
+            canvas.clipPath(circle);
 
-            // Even-odd path makes a transparent central opening, so the gold symbol
-            // remains exactly as it appears in the original bitmap.
-            Path reflectionArea = new Path();
-            reflectionArea.setFillType(Path.FillType.EVEN_ODD);
-            reflectionArea.addCircle(cx, cy, radius, Path.Direction.CW);
-            reflectionArea.addCircle(cx, cy, emblemClear, Path.Direction.CCW);
-            canvas.clipPath(reflectionArea);
-
-            float travel = (phase - 0.5f) * radius * 3.0f;
-            float beamX = cx + travel;
-            float beamY = cy - radius * 0.10f;
-
-            // Broad, soft reflection that glides slowly across the blue glass.
-            lightPaint.setStyle(Paint.Style.FILL);
-            lightPaint.setShader(new RadialGradient(
-                    beamX, beamY, radius * 0.88f,
-                    new int[] { 0x38ffffff, 0x19d8f6ff, 0x00ffffff },
-                    new float[] { 0f, 0.48f, 1f },
-                    Shader.TileMode.CLAMP));
-            canvas.drawCircle(beamX, beamY, radius * 0.88f, lightPaint);
-            lightPaint.setShader(null);
-
-            // Narrow diagonal specular highlight; low opacity to preserve the image.
-            canvas.save();
-            canvas.rotate(-27f, cx, cy);
-            float streakX = cx + travel * 1.18f;
-            RectF streak = new RectF(
-                    streakX - radius * 1.25f,
-                    cy - radius * 0.10f,
-                    streakX + radius * 1.25f,
-                    cy + radius * 0.10f);
-            lightPaint.setShader(new android.graphics.LinearGradient(
-                    streak.left, streak.top, streak.right, streak.bottom,
-                    new int[] { 0x00ffffff, 0x12ffffff, 0x42ffffff, 0x12ffffff, 0x00ffffff },
-                    new float[] { 0f, 0.34f, 0.5f, 0.66f, 1f },
-                    Shader.TileMode.CLAMP));
-            canvas.drawRoundRect(streak, radius * 0.1f, radius * 0.1f, lightPaint);
-            lightPaint.setShader(null);
+            RectF target = new RectF(cx - half + driftX, cy - half + driftY,
+                                     cx + half + driftX, cy + half + driftY);
+            portraitPaint.setAlpha(255);
+            portraitPaint.setShader(null);
+            canvas.drawBitmap(portraitReflection, null, target, portraitPaint);
             canvas.restore();
+        }
 
-            // A subtle moving glint near the edge of the medallion.
+        private void drawGlassHighlights(Canvas canvas) {
+            float cx = imageOffsetX + MEDALLION_X * imageScale;
+            float cy = imageOffsetY + MEDALLION_Y * imageScale;
+            float radius = MEDALLION_RADIUS * imageScale;
+
+            canvas.save();
+            Path circle = new Path();
+            circle.addCircle(cx, cy, radius * 0.94f, Path.Direction.CW);
+            canvas.clipPath(circle);
+
+            float travel = (float) Math.sin(phase * Math.PI * 2.0) * radius * 0.20f;
+            float beamX = cx + travel;
+            lightPaint.setShader(new RadialGradient(
+                    beamX, cy - radius * 0.12f, radius * 0.78f,
+                    new int[] { 0x25ffffff, 0x12d8f6ff, 0x00ffffff },
+                    new float[] { 0f, 0.5f, 1f }, Shader.TileMode.CLAMP));
+            canvas.drawCircle(beamX, cy - radius * 0.12f, radius * 0.78f, lightPaint);
+            lightPaint.setShader(null);
+
             float angle = (phase * 360f) - 90f;
             double radians = Math.toRadians(angle);
-            float glintX = cx + (float) Math.cos(radians) * radius * 0.78f;
-            float glintY = cy + (float) Math.sin(radians) * radius * 0.78f;
+            float gx = cx + (float) Math.cos(radians) * radius * 0.80f;
+            float gy = cy + (float) Math.sin(radians) * radius * 0.80f;
             lightPaint.setShader(new RadialGradient(
-                    glintX, glintY, radius * 0.22f,
-                    new int[] { 0x66ffffff, 0x20ffffff, 0x00ffffff },
+                    gx, gy, radius * 0.18f,
+                    new int[] { 0x55ffffff, 0x18ffffff, 0x00ffffff },
                     null, Shader.TileMode.CLAMP));
-            canvas.drawCircle(glintX, glintY, radius * 0.22f, lightPaint);
+            canvas.drawCircle(gx, gy, radius * 0.18f, lightPaint);
             lightPaint.setShader(null);
-
             canvas.restore();
 
-            phase += 0.0035f;
+            phase += 0.00055f;
             if (phase >= 1f) phase -= 1f;
         }
     }
