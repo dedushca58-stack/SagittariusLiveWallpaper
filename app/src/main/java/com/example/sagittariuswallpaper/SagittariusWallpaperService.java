@@ -69,22 +69,18 @@ public class SagittariusWallpaperService extends WallpaperService {
             p.setShader(new LinearGradient(0, 0, 1080, 2400,
                     new int[]{0xff073e43, 0xff062f35, 0xff041f27},
                     null, Shader.TileMode.CLAMP));
-            c.drawColor(Color.BLACK);
             c.drawRect(0, 0, 1080, 2400, p);
             p.setShader(null);
 
-            // Fine leather grain, fixed in place.
             random.setSeed(417);
             p.setColor(0x1affd9c0);
             p.setStrokeWidth(1.2f);
             for (int i = 0; i < 1700; i++) {
                 float x = random.nextFloat() * 1080f;
                 float y = random.nextFloat() * 2400f;
-                float r = 0.6f + random.nextFloat() * 1.5f;
                 c.drawPoint(x, y, p);
             }
 
-            // Upper glass panel.
             RectF panel = new RectF(92, 250, 988, 1040);
             p.setShader(new LinearGradient(0, 250, 0, 1040,
                     new int[]{0x55ffffff, 0x1827dce8, 0x3310a8ba, 0x44102029},
@@ -97,7 +93,6 @@ public class SagittariusWallpaperService extends WallpaperService {
             c.drawRoundRect(panel, 78, 78, p);
             p.setStyle(Paint.Style.FILL);
 
-            // Medallion and its blue glass depth.
             float cx = 540, cy = 635, radius = 258;
             p.setShader(new LinearGradient(cx-radius, cy-radius, cx+radius, cy+radius,
                     new int[]{0xffa7f4ff, 0xff176a9c, 0xff062c57, 0xff54bfe8},
@@ -113,7 +108,6 @@ public class SagittariusWallpaperService extends WallpaperService {
             c.drawCircle(cx, cy, radius-25, p);
             p.setStyle(Paint.Style.FILL);
 
-            // Moving light is clipped strictly to the medallion.
             c.save();
             Path clip = new Path();
             clip.addCircle(cx, cy, radius-18, Path.Direction.CW);
@@ -129,7 +123,6 @@ public class SagittariusWallpaperService extends WallpaperService {
             c.drawOval(new RectF(cx-210, cy-180, cx+210, cy+170), p);
             c.restore();
 
-            // Sagittarius glyph.
             p.setColor(0xffffd987);
             p.setTextAlign(Paint.Align.CENTER);
             p.setTypeface(Typeface.create("serif", Typeface.BOLD));
@@ -138,10 +131,9 @@ public class SagittariusWallpaperService extends WallpaperService {
             c.drawText("♐", cx, cy+88, p);
             p.clearShadowLayer();
 
-            // Lower matching glass strip.
             RectF strip = new RectF(92, 2110, 988, 2250);
             p.setShader(new LinearGradient(0, 2110, 0, 2250,
-                    new int[]{0x221ffffff, 0x4435d9e8, 0x33102029},
+                    new int[]{0x22ffffff, 0x4435d9e8, 0x33102029},
                     null, Shader.TileMode.CLAMP));
             c.drawRoundRect(strip, 48, 48, p);
             p.setShader(null);
