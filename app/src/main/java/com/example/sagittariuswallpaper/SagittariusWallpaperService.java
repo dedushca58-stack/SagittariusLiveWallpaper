@@ -1,77 +1,157 @@
 package com.example.sagittariuswallpaper;
 
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
-import android.os.Handler;
-import android.os.Looper;
+import android.graphics.Typeface;
 import android.service.wallpaper.WallpaperService;
 import android.view.SurfaceHolder;
+import android.os.Handler;
+import android.os.Looper;
+import java.util.Random;
 
 public class SagittariusWallpaperService extends WallpaperService {
-    @Override public Engine onCreateEngine() { return new LiveEngine(); }
-    private class LiveEngine extends Engine {
+    @Override public Engine onCreateEngine() { return new WallpaperEngine(); }
+
+    private class WallpaperEngine extends Engine {
         private final Handler handler = new Handler(Looper.getMainLooper());
-        private final Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-        private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint streakPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private Bitmap bitmap;
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Random random = new Random(417);
         private boolean visible;
-        private int screenW = 1, screenH = 1;
-        private long startTime;
+        private float phase = 0f;
         private final Runnable drawTask = new Runnable() {
-            @Override public void run() { drawFrame(); if (visible) handler.postDelayed(this, 40); }
+            @Override public void run() {
+                drawFrame();
+                if (visible) handler.postDelayed(this, 33);
+            }
         };
-        LiveEngine() {
-            bitmap = BitmapFactory.decodeResource(getResources(), R.drawable.wallpaper_base);
-            startTime = System.currentTimeMillis();
-            streakPaint.setStyle(Paint.Style.STROKE);
-            streakPaint.setStrokeCap(Paint.Cap.ROUND);
+
+        @Override public void onVisibilityChanged(boolean v) {
+            visible = v;
+            handler.removeCallbacks(drawTask);
+            if (visible) drawTask.run();
         }
-        @Override public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-            super.onSurfaceChanged(holder, format, width, height); screenW = width; screenH = height; drawFrame();
+        @Override public void onSurfaceChanged(SurfaceHolder h, int f, int w, int ht) {
+            super.onSurfaceChanged(h, f, w, ht);
+            drawFrame();
         }
-        @Override public void onVisibilityChanged(boolean isVisible) {
-            visible = isVisible; handler.removeCallbacks(drawTask);
-            if (visible) { startTime = System.currentTimeMillis(); handler.post(drawTask); }
+        @Override public void onSurfaceDestroyed(SurfaceHolder h) {
+            visible = false;
+            handler.removeCallbacks(drawTask);
+            super.onSurfaceDestroyed(h);
         }
         @Override public void onDestroy() {
-            visible = false; handler.removeCallbacks(drawTask);
-            if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle(); super.onDestroy();
+            visible = false;
+            handler.removeCallbacks(drawTask);
+            super.onDestroy();
         }
+
         private void drawFrame() {
-            SurfaceHolder holder = getSurfaceHolder(); Canvas c = null;
+            SurfaceHolder holder = getSurfaceHolder();
+            Canvas c = null;
             try {
-                c = holder.lockCanvas(); if (c == null) return;
-                if (bitmap == null) { c.drawColor(Color.BLACK); return; }
-                float scale = Math.max((float) screenW / bitmap.getWidth(), (float) screenH / bitmap.getHeight());
-                float dw = bitmap.getWidth() * scale, dh = bitmap.getHeight() * scale;
-                float left = (screenW - dw) / 2f, top = (screenH - dh) / 2f;
-                c.drawBitmap(bitmap, null, new RectF(left, top, left + dw, top + dh), imagePaint);
-                float cx = left + 161f * scale, cy = top + 481f * scale, radius = 85f * scale;
-                float t = (System.currentTimeMillis() - startTime) / 1000f;
-                c.save(); Path clip = new Path(); clip.addCircle(cx, cy, radius * 0.96f, Path.Direction.CW); c.clipPath(clip);
-                float x1 = cx + (float)Math.sin(t * 0.62f) * radius * 0.48f;
-                float y1 = cy + (float)Math.cos(t * 0.43f) * radius * 0.42f;
-                glowPaint.setShader(new RadialGradient(x1, y1, radius * 0.82f,
-                        new int[]{0x665FEAFF, 0x2254CFFF, 0x0040BFFF}, null, Shader.TileMode.CLAMP));
-                c.drawCircle(cx, cy, radius, glowPaint); glowPaint.setShader(null);
-                float angle = (t * 24f) % 360f - 90f, rad = (float)Math.toRadians(angle);
-                float sx = cx + (float)Math.cos(rad) * radius * 0.72f, sy = cy + (float)Math.sin(rad) * radius * 0.72f;
-                streakPaint.setStrokeWidth(Math.max(2f, scale * 2.2f)); streakPaint.setColor(0x99B9F7FF);
-                streakPaint.setShadowLayer(9f * scale, 0, 0, 0xAA36BFFF);
-                c.drawLine(sx - radius * 0.23f, sy - radius * 0.10f, sx + radius * 0.23f, sy + radius * 0.10f, streakPaint);
-                streakPaint.clearShadowLayer(); streakPaint.setStrokeWidth(Math.max(1.5f, scale * 1.2f));
-                streakPaint.setColor(0x668BEAFF);
-                RectF oval = new RectF(cx - radius * 0.88f, cy - radius * 0.88f, cx + radius * 0.88f, cy + radius * 0.88f);
-                c.drawArc(oval, angle - 28f, 48f, false, streakPaint); c.restore();
-            } catch (Exception ignored) { } finally { if (c != null) holder.unlockCanvasAndPost(c); }
+                c = holder.lockCanvas();
+                if (c == null) return;
+                drawScene(c, c.getWidth(), c.getHeight());
+            } finally {
+                if (c != null) holder.unlockCanvasAndPost(c);
+            }
+        }
+
+        private void drawScene(Canvas c, int w, int h) {
+            float sx = w / 1080f, sy = h / 2400f;
+            c.save();
+            c.scale(sx, sy);
+            p.setShader(new LinearGradient(0, 0, 1080, 2400,
+                    new int[]{0xff073e43, 0xff062f35, 0xff041f27},
+                    null, Shader.TileMode.CLAMP));
+            c.drawColor(Color.BLACK);
+            c.drawRect(0, 0, 1080, 2400, p);
+            p.setShader(null);
+
+            // Fine leather grain, fixed in place.
+            random.setSeed(417);
+            p.setColor(0x1affd9c0);
+            p.setStrokeWidth(1.2f);
+            for (int i = 0; i < 1700; i++) {
+                float x = random.nextFloat() * 1080f;
+                float y = random.nextFloat() * 2400f;
+                float r = 0.6f + random.nextFloat() * 1.5f;
+                c.drawPoint(x, y, p);
+            }
+
+            // Upper glass panel.
+            RectF panel = new RectF(92, 250, 988, 1040);
+            p.setShader(new LinearGradient(0, 250, 0, 1040,
+                    new int[]{0x55ffffff, 0x1827dce8, 0x3310a8ba, 0x44102029},
+                    null, Shader.TileMode.CLAMP));
+            c.drawRoundRect(panel, 78, 78, p);
+            p.setShader(null);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(4);
+            p.setColor(0x66d8ffff);
+            c.drawRoundRect(panel, 78, 78, p);
+            p.setStyle(Paint.Style.FILL);
+
+            // Medallion and its blue glass depth.
+            float cx = 540, cy = 635, radius = 258;
+            p.setShader(new LinearGradient(cx-radius, cy-radius, cx+radius, cy+radius,
+                    new int[]{0xffa7f4ff, 0xff176a9c, 0xff062c57, 0xff54bfe8},
+                    new float[]{0f, .35f, .72f, 1f}, Shader.TileMode.CLAMP));
+            c.drawCircle(cx, cy, radius, p);
+            p.setShader(null);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(13);
+            p.setColor(0x99d9f8ff);
+            c.drawCircle(cx, cy, radius-7, p);
+            p.setStrokeWidth(3);
+            p.setColor(0x77ffffff);
+            c.drawCircle(cx, cy, radius-25, p);
+            p.setStyle(Paint.Style.FILL);
+
+            // Moving light is clipped strictly to the medallion.
+            c.save();
+            Path clip = new Path();
+            clip.addCircle(cx, cy, radius-18, Path.Direction.CW);
+            c.clipPath(clip);
+            c.rotate((float)(Math.sin(phase) * 16f), cx, cy);
+            float shift = (float)((phase % 1.0f) * 760f) - 380f;
+            p.setShader(new LinearGradient(cx-440+shift, cy-350, cx+80+shift, cy+350,
+                    new int[]{0x00ffffff, 0x22ffffff, 0xaaffffff, 0x18ffffff, 0x00ffffff},
+                    new float[]{0f, .35f, .5f, .65f, 1f}, Shader.TileMode.CLAMP));
+            c.drawRect(cx-radius, cy-radius, cx+radius, cy+radius, p);
+            p.setShader(null);
+            p.setColor(0x35a9efff);
+            c.drawOval(new RectF(cx-210, cy-180, cx+210, cy+170), p);
+            c.restore();
+
+            // Sagittarius glyph.
+            p.setColor(0xffffd987);
+            p.setTextAlign(Paint.Align.CENTER);
+            p.setTypeface(Typeface.create("serif", Typeface.BOLD));
+            p.setTextSize(260);
+            p.setShadowLayer(20, 0, 5, 0xffffc45d);
+            c.drawText("♐", cx, cy+88, p);
+            p.clearShadowLayer();
+
+            // Lower matching glass strip.
+            RectF strip = new RectF(92, 2110, 988, 2250);
+            p.setShader(new LinearGradient(0, 2110, 0, 2250,
+                    new int[]{0x221ffffff, 0x4435d9e8, 0x33102029},
+                    null, Shader.TileMode.CLAMP));
+            c.drawRoundRect(strip, 48, 48, p);
+            p.setShader(null);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(3);
+            p.setColor(0x55d8ffff);
+            c.drawRoundRect(strip, 48, 48, p);
+            p.setStyle(Paint.Style.FILL);
+            c.restore();
+            phase += 0.006f;
         }
     }
 }

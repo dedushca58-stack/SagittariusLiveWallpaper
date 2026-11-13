@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sagittarius Live Wallpaper</string>
+    <string name="wallpaper_name">Стрелец — живые обои</string>
+    <string name="wallpaper_description">Бирюзовая кожа, стеклянный медальон и движущиеся блики</string>
+    <string name="choose_wallpaper">Установить живые обои</string>
+    <string name="hint">Нажми кнопку, затем выбери «Установить обои».</string>
+</resources>
