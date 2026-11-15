@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'AquaMotionLiveWallpaper/**'
+      - 'AquaMotionLiveWallpaper/app/src/main/assets/aqua_motion.mp4'
   workflow_dispatch:
 
 permissions:
