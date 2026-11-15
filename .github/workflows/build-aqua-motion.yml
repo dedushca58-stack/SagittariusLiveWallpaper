@@ -1,0 +1,41 @@
+name: Build Aqua Motion APK
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'AquaMotionLiveWallpaper/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: AquaMotionLiveWallpaper
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Verify source video
+        run: |
+          test -s app/src/main/assets/aqua_motion.mp4 || (echo "Missing app/src/main/assets/aqua_motion.mp4" && exit 1)
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Build APK
+        run: gradle --no-daemon assembleDebug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AquaMotionLiveWallpaper-debug
+          path: AquaMotionLiveWallpaper/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
