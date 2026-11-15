@@ -10,7 +10,12 @@ android {
         applicationId 'com.example.aquamotion'
         minSdk 23
         targetSdk 35
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '1.1'
+    }
+
+    // Keep the MP4 as an uncompressed asset so AssetFileDescriptor can open it.
+    androidResources {
+        noCompress 'mp4'
     }
 }

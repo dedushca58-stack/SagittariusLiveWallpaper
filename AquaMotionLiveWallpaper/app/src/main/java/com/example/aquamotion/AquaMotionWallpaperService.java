@@ -16,7 +16,7 @@ public class AquaMotionWallpaperService extends WallpaperService {
         private MediaPlayer player;
         private boolean visible;
         private boolean prepared;
-        private SurfaceHolder currentHolder;
+        private SurfaceHolder holder;
 
         @Override
         public void onCreate(SurfaceHolder surfaceHolder) {
@@ -25,40 +25,44 @@ public class AquaMotionWallpaperService extends WallpaperService {
         }
 
         @Override
-        public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-            super.onSurfaceChanged(holder, format, width, height);
-            currentHolder = holder;
-            if (player == null) {
-                createPlayer(holder);
-            } else if (prepared) {
-                player.setSurface(holder.getSurface());
-                updatePlayback();
-            }
+        public void onSurfaceChanged(SurfaceHolder surfaceHolder, int format, int width, int height) {
+            super.onSurfaceChanged(surfaceHolder, format, width, height);
+            holder = surfaceHolder;
+            // Recreate the player for the current live-wallpaper surface. This avoids
+            // retaining a stale Surface across preview/apply transitions on Android.
+            releasePlayer();
+            createPlayer();
         }
 
-        private void createPlayer(SurfaceHolder holder) {
+        private void createPlayer() {
+            if (holder == null || !holder.getSurface().isValid()) return;
+            MediaPlayer newPlayer = new MediaPlayer();
+            player = newPlayer;
+            prepared = false;
             try {
-                player = new MediaPlayer();
-                player.setLooping(true);
-                player.setVolume(0f, 0f);
-                player.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING);
-                player.setSurface(holder.getSurface());
+                newPlayer.setLooping(true);
+                newPlayer.setVolume(0f, 0f);
+                newPlayer.setVideoScalingMode(
+                        MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING);
 
                 try (android.content.res.AssetFileDescriptor afd =
                              getAssets().openFd("aqua_motion.mp4")) {
-                    player.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+                    newPlayer.setDataSource(
+                            afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
                 }
 
-                player.setOnPreparedListener(mp -> {
+                newPlayer.setDisplay(holder);
+                newPlayer.setOnPreparedListener(mp -> {
+                    if (player != mp) return;
                     prepared = true;
                     updatePlayback();
                 });
-                player.setOnErrorListener((mp, what, extra) -> {
-                    releasePlayer();
+                newPlayer.setOnErrorListener((mp, what, extra) -> {
+                    if (player == mp) releasePlayer();
                     return true;
                 });
-                player.prepareAsync();
-            } catch (IOException | IllegalArgumentException | IllegalStateException e) {
+                newPlayer.prepareAsync();
+            } catch (IOException | RuntimeException e) {
                 releasePlayer();
             }
         }
@@ -70,43 +74,42 @@ public class AquaMotionWallpaperService extends WallpaperService {
         }
 
         private void updatePlayback() {
-            if (player == null || !prepared) return;
+            MediaPlayer current = player;
+            if (current == null || !prepared) return;
             try {
-                if (visible && currentHolder != null && currentHolder.getSurface().isValid()) {
-                    if (!player.isPlaying()) player.start();
-                } else if (player.isPlaying()) {
-                    player.pause();
+                if (visible && holder != null && holder.getSurface().isValid()) {
+                    if (!current.isPlaying()) current.start();
+                } else if (current.isPlaying()) {
+                    current.pause();
                 }
-            } catch (IllegalStateException ignored) {
-                // The system can destroy the wallpaper surface during transitions.
+            } catch (IllegalStateException e) {
+                releasePlayer();
             }
         }
 
         @Override
-        public void onSurfaceDestroyed(SurfaceHolder holder) {
-            currentHolder = null;
-            if (player != null) {
-                try {
-                    player.setSurface(null);
-                    if (prepared && player.isPlaying()) player.pause();
-                } catch (IllegalStateException ignored) { }
-            }
-            super.onSurfaceDestroyed(holder);
+        public void onSurfaceDestroyed(SurfaceHolder surfaceHolder) {
+            holder = null;
+            releasePlayer();
+            super.onSurfaceDestroyed(surfaceHolder);
         }
 
         private void releasePlayer() {
             prepared = false;
-            if (player != null) {
-                try { player.setSurface(null); } catch (Exception ignored) { }
-                try { player.reset(); } catch (Exception ignored) { }
-                try { player.release(); } catch (Exception ignored) { }
-                player = null;
+            MediaPlayer old = player;
+            player = null;
+            if (old != null) {
+                try { old.setOnPreparedListener(null); } catch (RuntimeException ignored) { }
+                try { old.setOnErrorListener(null); } catch (RuntimeException ignored) { }
+                try { old.reset(); } catch (RuntimeException ignored) { }
+                try { old.release(); } catch (RuntimeException ignored) { }
             }
         }
 
         @Override
         public void onDestroy() {
             visible = false;
+            holder = null;
             releasePlayer();
             super.onDestroy();
         }
